@@ -14,6 +14,8 @@ final class ShelfPanel: NSPanel {
             switch event.keyCode {
             case 49: ctl?.quickLookHovered()      // space
             case 53: ctl?.close()                 // esc
+            case 51, 117: ctl?.removeHovered()    // delete
+            case 36, 76: ctl?.openHovered()       // return
             default: super.keyDown(with: event)
             }
         }
@@ -81,6 +83,7 @@ final class ShelfController: NSObject {
 
     private func present() {
         closing?.cancel()
+        shelf.refreshAvailability()
         panel.orderFrontRegardless()
         shelf.presented = true
     }
@@ -120,8 +123,16 @@ final class ShelfController: NSObject {
         }
     }
 
+    /// Where a saved frame goes now: moved fully inside the visible area of the screen it overlaps most, nil when no screen has it.
+    static func restoredOrigin(_ frame: CGRect, visibleFrames: [CGRect]) -> CGPoint? {
+        func overlap(_ r: CGRect) -> CGFloat { let i = r.intersection(frame); return i.isNull ? 0 : i.width * i.height }
+        guard let area = visibleFrames.max(by: { overlap($0) < overlap($1) }), overlap(area) > 0 else { return nil }
+        return CGPoint(x: min(max(frame.minX, area.minX), max(area.minX, area.maxX - frame.width)),
+                       y: min(max(frame.minY, area.minY), max(area.minY, area.maxY - frame.height)))
+    }
+
     func restore(frame: CGRect?) {
-        if let frame, NSScreen.screens.contains(where: { $0.frame.intersects(frame) }) { panel.setFrameOrigin(frame.origin) }
+        if let frame, let origin = Self.restoredOrigin(frame, visibleFrames: NSScreen.screens.map(\.visibleFrame)) { panel.setFrameOrigin(origin) }
         else { show(near: NSEvent.mouseLocation); return }
         present()
     }
@@ -148,18 +159,22 @@ final class ShelfController: NSObject {
         shelf.remove([item.id], trashSaved: true)
         if shelf.items.isEmpty && closeEmpty() { close() }
     }
-    func open(_ item: ShelfItem) { NSWorkspace.shared.open(item.url) }
-    func reveal(_ item: ShelfItem) { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+    func open(_ item: ShelfItem) { if item.available { NSWorkspace.shared.open(item.url) } }
+    func reveal(_ item: ShelfItem) { if item.available { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } }
     func copy(_ item: ShelfItem) {
+        guard item.available else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.writeObjects([item.url as NSURL])
     }
-    func quickLook(_ item: ShelfItem) { QuickLook.shared.toggle(shelf.items.map(\.url), selected: item.url) }
+    func quickLook(_ item: ShelfItem) { if item.available { QuickLook.shared.toggle(shelf.availableURLs, selected: item.url) } }
+    private var hovered: ShelfItem? { shelf.items.first { $0.id == shelf.hovered } }
+    func removeHovered() { if let item = hovered { remove(item) } }
+    func openHovered() { if let item = hovered { open(item) } }
     func quickLookHovered() {
         if let id = shelf.hovered, let item = shelf.items.first(where: { $0.id == id }) { quickLook(item) }
     }
     func share(_ item: ShelfItem) {
-        guard let view = panel.contentView else { return }
+        guard item.available, let view = panel.contentView else { return }
         let p = panel.mouseLocationOutsideOfEventStream
         NSSharingServicePicker(items: [item.url]).show(relativeTo: NSRect(x: p.x, y: p.y, width: 1, height: 1), of: view, preferredEdge: .minY)
     }
@@ -183,8 +198,13 @@ final class ShelfController: NSObject {
     }
 
     /// A drag out of the shelf ended. A completed plain drag takes the items off the shelf; Option keeps them.
+    /// Dropping back onto the shelf itself is not a drag out.
+    static func removesAfterDrag(_ operation: NSDragOperation, optionHeld: Bool, endedAt point: NSPoint, panel: CGRect) -> Bool {
+        operation != [] && !optionHeld && !panel.contains(point)
+    }
+
     func dragEnded(ids: Set<UUID>, _ operation: NSDragOperation, _ optionHeld: Bool) {
-        guard operation != [], !optionHeld else { return }
+        guard Self.removesAfterDrag(operation, optionHeld: optionHeld, endedAt: NSEvent.mouseLocation, panel: panel.frame) else { return }
         shelf.remove(ids, trashSaved: false)
         if shelf.items.isEmpty && closeEmpty() { close() }
     }

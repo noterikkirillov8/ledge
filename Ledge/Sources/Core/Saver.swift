@@ -19,6 +19,7 @@ enum Saver {
     static func sanitize(_ s: String, fallback: String) -> String {
         let bad = CharacterSet(charactersIn: "/:\\").union(.controlCharacters)
         let clean = s.components(separatedBy: bad).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            .drop { $0 == "." }.description   // a leading dot would make the saved file hidden in Finder
         return clean.isEmpty ? fallback : String(clean.prefix(40))
     }
 

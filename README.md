@@ -15,6 +15,7 @@ Requires macOS 15 or later.
 - Mail attachments and Photos drops work.
 - Items that were moved or deleted are removed from the shelf with a quiet note.
 - Drag one item or the whole stack out. Option-drag keeps it on the shelf.
+- Dropping something already on the shelf says so. With the pointer over an item, Delete removes it and Return opens it.
 - Right-click for Quick Look, Copy, Reveal in Finder, Share or Remove.
 - Quick actions for the shelf: AirDrop, Zip (an `Archive.zip` beside the originals) and Copy path.
 

@@ -16,10 +16,17 @@ enum QuickActions {
         return url.deletingLastPathComponent().appendingPathComponent("\(stem) \(number)\(suffix)")
     }
 
-    static func archive(_ urls: [URL]) throws -> URL {
+    /// Beside the originals, except when the first item is one of Ledge's own saved copies: its folder is trashed with it,
+    /// so the zip gets a folder of its own and counts as a saved copy itself.
+    static func archiveDestination(for first: URL, itemsDir: URL = Saver.itemsDir) throws -> (parent: URL, saved: Bool) {
+        guard first.standardizedFileURL.path.hasPrefix(itemsDir.standardizedFileURL.path + "/") else { return (first.deletingLastPathComponent(), false) }
+        return (try Saver.newFolder(in: itemsDir), true)
+    }
+
+    static func archive(_ urls: [URL], into folder: URL? = nil) throws -> URL {
         guard let first = urls.first else { throw CocoaError(.fileNoSuchFile) }
         let files = FileManager.default
-        let parent = first.deletingLastPathComponent()
+        let parent = folder ?? first.deletingLastPathComponent()
         let scratch = parent.appendingPathComponent(".ledge-\(UUID().uuidString)", isDirectory: true)
         let scratchPath = scratch.resolvingSymlinksInPath().standardizedFileURL.pathComponents
         guard !urls.contains(where: { scratchPath.starts(with: $0.resolvingSymlinksInPath().standardizedFileURL.pathComponents) }) else {

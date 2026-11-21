@@ -37,6 +37,19 @@ enum SelfTest {
     }
 
     private static func testQuickActions() {
+        do {
+            let items = FileManager.default.temporaryDirectory.appendingPathComponent("ledge-zip-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: items) }
+            let saved = (try? Saver.saveText("zip me", in: items))!
+            let place = try? QuickActions.archiveDestination(for: saved, itemsDir: items)
+            let zip = try? QuickActions.archive([saved], into: place?.parent)
+            check("zip: beside a saved copy it gets its own folder and counts as saved",
+                  place?.saved == true && zip?.lastPathComponent == "Archive.zip" && zip?.deletingLastPathComponent() != saved.deletingLastPathComponent()
+                  && zip?.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL == items.standardizedFileURL
+                  && FileManager.default.fileExists(atPath: saved.path))
+            let outside = try? QuickActions.archiveDestination(for: URL(fileURLWithPath: "/Survey/a.pdf"), itemsDir: items)
+            check("zip: beside an ordinary file it stays beside it, not saved", outside?.parent.path == "/Survey" && outside?.saved == false)
+        }
         let first = URL(fileURLWithPath: "/Survey/Field notes.pdf"), second = URL(fileURLWithPath: "/Survey/Ridge & valley.png")
         let archive = URL(fileURLWithPath: "/Survey/Archive.zip")
         let zip = QuickActions.zipCommand(source: first, output: archive)
@@ -47,6 +60,18 @@ enum SelfTest {
 
     static func run() async {
         testQuickActions()
+        let screens = [CGRect(x: 0, y: 0, width: 1440, height: 860), CGRect(x: 1440, y: 0, width: 1920, height: 1040)]
+        func restored(_ x: Double, _ y: Double) -> CGPoint? { ShelfController.restoredOrigin(CGRect(x: x, y: y, width: 416, height: 200), visibleFrames: screens) }
+        check("restore frame: inside a screen stays put", restored(300, 300) == CGPoint(x: 300, y: 300))
+        check("restore frame: hanging under the menu bar or off the edge is pulled in", restored(300, 800) == CGPoint(x: 300, y: 660) && restored(-300, -50) == CGPoint(x: 0, y: 0))
+        check("restore frame: straddling two screens goes to the one it mostly overlaps", restored(1300, 300) == CGPoint(x: 1440, y: 300))
+        check("restore frame: unplugged screen gives no origin", restored(5000, 100) == nil)
+        let panel = CGRect(x: 100, y: 100, width: 416, height: 200)
+        check("drag out: dropped elsewhere removes, dropped back on the shelf or with Option keeps",
+              ShelfController.removesAfterDrag(.copy, optionHeld: false, endedAt: NSPoint(x: 700, y: 300), panel: panel)
+              && !ShelfController.removesAfterDrag(.copy, optionHeld: false, endedAt: NSPoint(x: 200, y: 150), panel: panel)
+              && !ShelfController.removesAfterDrag(.copy, optionHeld: true, endedAt: NSPoint(x: 700, y: 300), panel: panel)
+              && !ShelfController.removesAfterDrag([], optionHeld: false, endedAt: NSPoint(x: 700, y: 300), panel: panel))
         // Shake detector on fixture sequences.
         let zigzag: [CGFloat] = [0, 20, 45, 20, 0, 25, 50, 25, 0, 25, 50]
         check("shake: quick zigzag fires", shakes(zigzag, step: 0.04))
@@ -126,6 +151,27 @@ enum SelfTest {
             check("restore: bookmark resolves inside fake Trash", Bookmark.resolve(record.items[1].bookmark)?.url.standardizedFileURL == trashed.standardizedFileURL)
             check("restore: trashed and deleted references removed with one note", filtered.items.map(\.id) == [record.items[0].id] && filtered.restorationNote == "2 items were removed (moved or deleted)" && fm.fileExists(atPath: trashed.path))
         } catch { check("restore: fake Trash fixture", false) }
+        do {
+            let keep = root.appendingPathComponent("on-drive.txt")
+            try? "x".write(to: keep, atomically: true, encoding: .utf8)
+            let data = Bookmark.make(keep)!
+            try? fm.removeItem(at: keep)
+            let record = ItemRecord(id: UUID(), bookmark: data, saved: false)
+            check("volume: file missing on a mounted volume is dropped", ShelfItem(record: record, trashDirectory: nil, volumeMounted: { _ in true }) == nil)
+            let away = ShelfItem(record: record, trashDirectory: nil, volumeMounted: { _ in false })
+            check("volume: file on an unmounted volume stays, marked unavailable, bookmark kept", away?.available == false && away?.detail == "Unavailable" && away?.bookmark == data && away?.name == "on-drive.txt")
+            let held = Shelf(items: [away!])
+            held.refreshAvailability(volumeMounted: { _ in false })
+            check("volume: still unmounted keeps the item", held.items.count == 1 && held.availableURLs.isEmpty)
+            try? "x".write(to: keep, atomically: true, encoding: .utf8)
+            held.refreshAvailability(volumeMounted: { _ in true })
+            check("volume: reconnected item is live again", held.items.first?.available == true && held.availableURLs.count == 1)
+            try? fm.removeItem(at: keep)
+            let lost = Shelf(items: [away!])
+            lost.refreshAvailability(volumeMounted: { _ in true })
+            check("volume: item gone from a mounted volume is cleaned up", lost.items.isEmpty)
+            check("volume: only /Volumes paths can be unmounted", Bookmark.defaultVolumeMounted(URL(fileURLWithPath: "/Users/x/a.txt")) && !Bookmark.defaultVolumeMounted(URL(fileURLWithPath: "/Volumes/NoSuchDrive-\(UUID().uuidString)/a.txt")))
+        }
         shelf.remove([shelf.items[0].id], trashSaved: true)
         check("shelf: removing from shelf keeps the file", fm.fileExists(atPath: a.path) && shelf.items.count == 2)
 
@@ -153,7 +199,7 @@ enum SelfTest {
         let link = try? Saver.saveLink(URL(string: "https://example.com/page")!, in: dir)
         let plist = link.flatMap { try? Data(contentsOf: $0) }.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: String] }
         check("save link: .webloc holds the URL", link?.pathExtension == "webloc" && plist?["URL"] == "https://example.com/page")
-        check("save text: slashes and empty names are cleaned", Saver.sanitize("a/b:c", fallback: "Text") == "a b c" && Saver.sanitize("  ", fallback: "Text") == "Text")
+        check("save text: slashes and empty names are cleaned", Saver.sanitize("a/b:c", fallback: "Text") == "a b c" && Saver.sanitize("  ", fallback: "Text") == "Text" && Saver.sanitize(".env file", fallback: "Text") == "env file" && Saver.sanitize("...", fallback: "Text") == "Text")
 
         let keepTrash = text!
         Saver.trashIfOurs(a, itemsDir: dir, trash: trash)
@@ -246,7 +292,7 @@ enum SelfTest {
         check("drop: one cue, one hand-off batch, no duplicates or generated copies", sounds == 1 && batches == [[images[0], other, images[2]]])
         let duplicate = DropBatch(count: 1, sound: { sounds += 1 }, handoff: { urls, _ in batches.append(urls) })
         duplicate.finish(images[0], on: shelf)
-        check("drop: no sound or hand-off when nothing lands", sounds == 1 && batches.count == 1)
+        check("drop: no sound or hand-off when nothing lands, and the shelf says why", sounds == 1 && batches.count == 1 && shelf.restorationNote == "Already on the shelf")
         let cache = root.appendingPathComponent("Pinch cache", isDirectory: true)
         var received = [URL]()
         await PinchHandoff.sendCopies(of: batches[0], to: shelf, cache: cache) { urls in

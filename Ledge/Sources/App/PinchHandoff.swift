@@ -50,6 +50,7 @@ import AppKit
 @MainActor final class DropBatch {
     private var remaining: Int
     private var didLand = false
+    private var repeated = false
     private var files: [URL] = []
     private let sound: @MainActor () -> Void
     private let handoff: @MainActor ([URL], Shelf) -> Void
@@ -59,15 +60,17 @@ import AppKit
     }
 
     func land(_ url: URL?, on shelf: Shelf, saved: Bool) {
-        if let url, shelf.add([url], saved: saved) {
+        guard let url else { return }
+        if shelf.add([url], saved: saved) {
             if !didLand { didLand = true; sound() }
             if !saved { files.append(url) }
-        }
+        } else { repeated = true }
     }
 
     func finish(_ url: URL?, on shelf: Shelf, saved: Bool = false) {
         land(url, on: shelf, saved: saved)
         remaining -= 1
+        if remaining == 0, !didLand, repeated { shelf.restorationNote = "Already on the shelf" }
         if remaining == 0, !files.isEmpty { handoff(files, shelf) }
     }
 }

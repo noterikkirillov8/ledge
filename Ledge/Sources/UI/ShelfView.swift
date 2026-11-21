@@ -35,7 +35,7 @@ struct ShelfView: View {
         if let ctl {
             ledge.onDrop(of: ShelfDrop.types, delegate: ShelfDrop(shelf: shelf, ctl: ctl))
                 .ledgeEntrance(shelf.presented)
-                .task(id: shelf.presented) {
+                .task(id: "\(shelf.presented)\(shelf.restorationNote ?? "")") {
                     guard shelf.presented, shelf.restorationNote != nil else { return }
                     try? await Task.sleep(for: .seconds(4))
                     if !Task.isCancelled { shelf.restorationNote = nil }
@@ -119,7 +119,7 @@ struct ShelfView: View {
                         Image(systemName: "circle.grid.2x2.fill"); Text("Drag all")
                     }.font(KitFont.key).padding(.horizontal, 8).frame(height: 26)
                         .background(KitColor.raised, in: RoundedRectangle(cornerRadius: 5))
-                        .overlay { if ctl != nil { DragSource(urls: { shelf.items.map(\.url) }, onEnd: { ctl?.dragEnded(ids: Set(shelf.items.map(\.id)), $0, $1) }) } }
+                        .overlay { if ctl != nil { DragSource(urls: { shelf.availableURLs }, onEnd: { ctl?.dragEnded(ids: Set(shelf.items.map(\.id)), $0, $1) }) } }
                 }
                 if spread && lastPage > 0 {
                     KitIconButton(symbol: "chevron.right", help: "Next four files") { page = (min(page, lastPage) + 1) % (lastPage + 1); shelf.hovered = nil }
@@ -175,7 +175,7 @@ struct ShelfView: View {
     }
 
     private func airDrop() {
-        let urls = shelf.items.map(\.url)
+        let urls = shelf.availableURLs
         guard let service = NSSharingService(named: .sendViaAirDrop), service.canPerform(withItems: urls) else {
             feedback("Unavailable"); return
         }
@@ -185,18 +185,19 @@ struct ShelfView: View {
     private func copyPaths() {
         let board = NSPasteboard.general
         board.clearContents()
-        if board.setString(QuickActions.pathText(shelf.items.map(\.url)), forType: .string) { feedback(copied: true) }
+        if board.setString(QuickActions.pathText(shelf.availableURLs), forType: .string) { feedback(copied: true) }
         else { feedback("Copy failed") }
     }
 
     private func zip() {
         guard !zipping else { return }; zipping = true
-        let urls = shelf.items.map(\.url)
+        let urls = shelf.availableURLs
         Task {
             defer { zipping = false }
             do {
-                let archive = try await Task.detached(priority: .userInitiated) { try QuickActions.archive(urls) }.value
-                if !shelf.add([archive]) { feedback("Not shelved") }
+                let place = try urls.first.map { try QuickActions.archiveDestination(for: $0) }
+                let archive = try await Task.detached(priority: .userInitiated) { try QuickActions.archive(urls, into: place?.parent) }.value
+                if !shelf.add([archive], saved: place?.saved ?? false) { feedback("Not shelved") }
             } catch { feedback("Zip failed") }
         }
     }
@@ -205,7 +206,7 @@ struct ShelfView: View {
         ThumbnailCard(item: item, selected: spread && active?.id == item.id)
             .overlay {
                 if ctl != nil {
-                    DragSource(urls: { [item.url] }, onEnd: { ctl?.dragEnded(ids: [item.id], $0, $1) },
+                    DragSource(urls: { item.available ? [item.url] : [] }, onEnd: { ctl?.dragEnded(ids: [item.id], $0, $1) },
                                menu: { ctl?.menu(for: item) }, onHover: { inside in if inside { shelf.hovered = item.id } }, onOpen: { ctl?.open(item) })
                 }
             }
